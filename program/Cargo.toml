@@ -1,0 +1,12 @@
+[package]
+name = "pinocchio-rent-bug"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+pinocchio = "0.11.0"
+pinocchio-system = "0.6.0"
+solana-address = "2.6.0"

@@ -1,0 +1,4 @@
+#!/bin/bash
+set -e
+cd "$(dirname "$0")/.."
+cd program && cargo build-sbf --tools-version v1.54
