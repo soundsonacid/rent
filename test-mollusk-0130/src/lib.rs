@@ -1,12 +1,15 @@
-//! Minimal reproduction: pinocchio Rent::minimum_balance is 2x too low.
+//! mollusk 0.13.0: the pinocchio "rent bug" REPRODUCES.
 //!
-//! pinocchio's Rent reads only `lamports_per_byte_year` from the sysvar and
-//! computes `(128 + data_len) * lamports_per_byte_year`. The SDK multiplies
-//! by `exemption_threshold` (default 2.0), producing double the value.
+//! mollusk 0.13.0's default Rent sysvar is still the pre-SIMD-0194
+//! `{ lamports_per_byte_year: 3480, exemption_threshold: 2.0 }`. pinocchio's
+//! `Rent::minimum_balance` ignores the threshold and computes
+//! `(128 + data_len) * lamports_per_byte`, so it funds the new account with
+//! HALF the required lamports and the token program rejects
+//! InitializeAccount3 with "Lamport balance below rent-exempt threshold".
 //!
-//! This causes `CreateAccount::with_minimum_balance` to fund accounts with
-//! half the required lamports. Native SPL Token then rejects InitializeAccount3
-//! with "Lamport balance below rent-exempt threshold".
+//! Mainnet's rent sysvar (checked 2026-07-08 via RPC) already holds the
+//! SIMD-0194 values `{6960, 1.0}`, under which pinocchio's math is correct —
+//! see `test-mollusk-0134`, where the same fixture passes.
 
 #[cfg(test)]
 mod tests {
@@ -35,7 +38,9 @@ mod tests {
     }
 
     #[test]
-    fn pinocchio_rent_creates_account_with_half_required_lamports() {
+    fn mollusk_0130_pinocchio_funds_half_rent_and_token_init_fails() {
+        // fixture lives in the shared top-level fixtures/ directory
+        std::env::set_var("SBF_OUT_DIR", concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures"));
         let mut mollusk = Mollusk::new(&PROGRAM_ID, "pinocchio_rent_bug");
         token::add_program(&mut mollusk);
 
@@ -73,20 +78,24 @@ mod tests {
 
         let result = mollusk.process_instruction(&ix, accounts);
 
+        // solana-sdk 2.x Rent::default() matches mollusk 0.13.0's sysvar:
+        // the OLD convention {3480, 2.0}.
         let rent = Rent::default();
-        let correct = rent.minimum_balance(165);
+        let full = rent.minimum_balance(165);
         let pinocchio_val = (128 + 165u64) * rent.lamports_per_byte_year;
         println!();
-        println!("SDK    Rent::minimum_balance(165) = {correct}");
-        println!("Pinocchio minimum_balance(165)    = {pinocchio_val}");
-        println!("Ratio: {:.1}x", correct as f64 / pinocchio_val as f64);
+        println!(
+            "harness rent sysvar (old): lamports_per_byte_year={} threshold={}",
+            rent.lamports_per_byte_year, rent.exemption_threshold
+        );
+        println!("full rent-exempt minimum(165)  = {full}");
+        println!("pinocchio-funded amount        = {pinocchio_val}");
         println!("Result: {:?}", result.program_result);
 
-        // Should fail with a token program error (NotRentExempt),
-        // NOT with NotEnoughAccountKeys
         assert!(
             result.program_result.is_err(),
-            "Expected failure: pinocchio creates accounts with half the required rent lamports"
+            "Expected failure under mollusk 0.13.0: its pre-SIMD-0194 rent sysvar \
+             makes pinocchio fund half the required lamports"
         );
     }
 }

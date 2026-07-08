@@ -1,9 +1,15 @@
-//! litesvm 0.10.0 counterpart of the Mollusk repro in `test/src/lib.rs`.
+//! litesvm 0.11.0: the pinocchio "rent bug" does NOT reproduce.
 //!
-//! Runs the same fixture (`pinocchio_rent_bug.so`) through litesvm to check
-//! whether the pinocchio `Rent::minimum_balance` underfunding reproduces
-//! under a different test harness, ruling out a Mollusk-specific sysvar
-//! serialization issue.
+//! litesvm 0.11.0 (solana-rent 4.x defaults) installs the SIMD-0194 Rent
+//! sysvar `{ lamports_per_byte: 6960, exemption_threshold: 1.0 }`, and swaps
+//! SPL Token for p-token at the Tokenkeg address (feature
+//! `replace_spl_token_with_p_token`, active under FeatureSet::all_enabled).
+//! pinocchio's `(128 + len) * lamports_per_byte` now yields the full
+//! 2,039,280-lamport minimum, so the same fixture that fails under litesvm
+//! 0.10.0 succeeds here.
+//!
+//! This matches mainnet: its rent sysvar (checked 2026-07-08 via RPC) already
+//! holds `{6960, 1.0}`, so pinocchio computes the correct value in production.
 
 #[cfg(test)]
 mod tests {
@@ -12,14 +18,12 @@ mod tests {
     use solana_address::Address;
     use solana_instruction::{AccountMeta, Instruction};
     use solana_keypair::Keypair;
-    use solana_rent::Rent;
     use solana_signer::Signer;
     use solana_transaction::Transaction;
 
     const PROGRAM_ID: Address = Address::new_from_array([1u8; 32]);
 
-    // TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA — litesvm ships this
-    // program built in, so the fixture's CPI target is already loaded.
+    // TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA — p-token in litesvm 0.11.
     const TOKEN_PROGRAM: Address = Address::new_from_array([
         6, 221, 246, 225, 215, 101, 161, 147, 217, 203, 225, 70, 206, 235, 121, 172,
         28, 180, 133, 237, 95, 91, 55, 145, 58, 140, 245, 133, 126, 255, 0, 169,
@@ -27,6 +31,10 @@ mod tests {
 
     // 11111111111111111111111111111111
     const SYSTEM_PROGRAM: Address = Address::new_from_array([0u8; 32]);
+
+    /// Full rent-exempt minimum for a 165-byte token account. Identical under
+    /// both rent conventions: (128+165)*3480*2.0 == (128+165)*6960*1.0.
+    const TOKEN_ACCOUNT_RENT: u64 = 2_039_280;
 
     fn mint_account(lamports: u64) -> Account {
         let mut data = vec![0u8; 82];
@@ -36,14 +44,11 @@ mod tests {
     }
 
     #[test]
-    fn litesvm_pinocchio_rent_creates_account_with_half_required_lamports() {
+    fn litesvm_0110_pinocchio_funds_full_rent_and_token_init_succeeds() {
         let mut svm = LiteSVM::new();
         svm.add_program_from_file(
             PROGRAM_ID,
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../test/tests/fixtures/pinocchio_rent_bug.so"
-            ),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/pinocchio_rent_bug.so"),
         )
         .expect("failed to load pinocchio_rent_bug.so fixture");
 
@@ -78,23 +83,11 @@ mod tests {
         );
         let result = svm.send_transaction(tx);
 
-        let rent = Rent::default();
-        let correct = rent.minimum_balance(165);
-        #[allow(deprecated)] // mirrors pinocchio's computation, which uses this field
-        let pinocchio_val = (128 + 165u64) * rent.lamports_per_byte_year;
-        println!();
-        println!("SDK    Rent::minimum_balance(165) = {correct}");
-        println!("Pinocchio minimum_balance(165)    = {pinocchio_val}");
-        println!("Ratio: {:.1}x", correct as f64 / pinocchio_val as f64);
-
         match &result {
             Ok(meta) => {
-                println!("Transaction SUCCEEDED — bug does NOT reproduce under litesvm");
+                println!("Transaction SUCCEEDED");
                 for log in &meta.logs {
                     println!("  {log}");
-                }
-                if let Some(acct) = svm.get_account(&new_account) {
-                    println!("new_account lamports: {}", acct.lamports);
                 }
             }
             Err(failed) => {
@@ -105,22 +98,17 @@ mod tests {
             }
         }
 
-        let failed = result.expect_err(
-            "Expected failure: pinocchio creates accounts with half the required rent lamports \
-             (if this test fails, litesvm does NOT reproduce the bug)",
-        );
+        result.expect("expected success under litesvm 0.11 (SIMD-0194 rent sysvar)");
 
-        // Confirm it is the same failure mode as under Mollusk: SPL Token
-        // rejecting InitializeAccount3 for insufficient rent, not some other
-        // harness-specific error.
-        assert!(
-            failed
-                .meta
-                .logs
-                .iter()
-                .any(|l| l.contains("rent-exempt")),
-            "Transaction failed, but not with the rent-exemption error: {:?}",
-            failed.err
+        let created = svm
+            .get_account(&new_account)
+            .expect("new token account should exist");
+        println!("new_account lamports: {}", created.lamports);
+        assert_eq!(
+            created.lamports, TOKEN_ACCOUNT_RENT,
+            "pinocchio should fund the full rent-exempt minimum under SIMD-0194 rent values"
         );
+        assert_eq!(created.owner, TOKEN_PROGRAM.into());
+        assert_eq!(created.data.len(), 165);
     }
 }

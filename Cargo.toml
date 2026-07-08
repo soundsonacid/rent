@@ -1,3 +1,8 @@
 [workspace]
-members = ["program", "test", "test-litesvm"]
+# test-mollusk-0134 is excluded: mollusk 0.13.0 and 0.13.4 are in the same
+# semver range, so cargo cannot hold both in one lockfile. That crate is its
+# own standalone workspace. litesvm 0.10/0.11 are distinct 0.x ranges and can
+# coexist here.
+members = ["program", "test-mollusk-0130", "test-litesvm-0100", "test-litesvm-0110"]
+exclude = ["test-mollusk-0134"]
 resolver = "2"

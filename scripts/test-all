@@ -1,0 +1,5 @@
+#!/bin/bash
+set -e
+cd "$(dirname "$0")/.."
+taskset -c '0-127' cargo test -p test-mollusk-0130 -p test-litesvm-0100 -p test-litesvm-0110 -- --nocapture
+(cd test-mollusk-0134 && CARGO_TARGET_DIR="$PWD/../target" taskset -c '0-127' cargo test -- --nocapture)
